@@ -1,0 +1,94 @@
+name: Build and Release (Windows)
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-win:
+    name: Build Windows EXE
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Ensure root icon.ico exists (compat)
+        shell: pwsh
+        run: |
+          if (Test-Path "build/icon.ico") {
+            Copy-Item -Force "build/icon.ico" "icon.ico"
+          }
+
+      - name: Build win EXE (NSIS, version from tag)
+        shell: bash
+        run: |
+          VERSION_FROM_TAG=${GITHUB_REF_NAME#v}
+          npx electron-builder --win nsis --publish=never --config.extraMetadata.version=$VERSION_FROM_TAG
+        env:
+          CI: true
+
+      - name: ZIP EXE and create checksum
+        shell: pwsh
+        run: |
+          $exes = Get-ChildItem -Path dist -Filter CompetitionsApp-Setup-*.exe
+          foreach ($f in $exes) {
+            $zipPath = "$($f.FullName).zip"
+            if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
+            Compress-Archive -Path $f.FullName -DestinationPath $zipPath -Force
+          }
+          $hashes = @()
+          foreach ($f in $exes) {
+            $h = Get-FileHash -Algorithm SHA256 $f.FullName
+            $hashes += "$($h.Hash)  $($f.Name)"
+          }
+          $hashes | Out-File -FilePath dist/CompetitionsApp-checksums-win.txt -Encoding ASCII
+
+      - name: Show dist contents (win)
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path dist | Format-List -Property Name,Length,LastWriteTime
+
+      - name: Upload win artifacts (EXE)
+        uses: actions/upload-artifact@v4
+        with:
+          name: win-exe
+          path: |
+            dist/CompetitionsApp-Setup-*.exe
+            dist/CompetitionsApp-Setup-*.exe.zip
+            dist/CompetitionsApp-checksums-win.txt
+
+  release:
+    name: Create GitHub Release and Attach Artifacts
+    needs: [build-win]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download win artifacts (EXE)
+        uses: actions/download-artifact@v4
+        with:
+          name: win-exe
+          path: ./release-assets
+
+      - name: Show gathered assets
+        run: ls -R ./release-assets
+
+      - name: Create Release (EXE)
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-assets/CompetitionsApp-Setup-*.exe
+            release-assets/CompetitionsApp-Setup-*.exe.zip
+            release-assets/**/CompetitionsApp-checksums-win.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
