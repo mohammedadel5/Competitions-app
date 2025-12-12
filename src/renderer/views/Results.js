@@ -149,6 +149,12 @@ window.renderResultsView = function renderResultsView(root) {
 
         detailsContainer.appendChild(titleEl);
         detailsContainer.appendChild(meta);
+        if (result.judge_notes) {
+          const notesEl = document.createElement('p');
+          notesEl.className = 'results-details-notes';
+          notesEl.textContent = result.judge_notes;
+          detailsContainer.appendChild(notesEl);
+        }
         detailsContainer.appendChild(list);
       })
       .catch(() => {

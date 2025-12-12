@@ -153,6 +153,10 @@ window.renderCompetitionsView = function renderCompetitionsView(root) {
 
   root.appendChild(container);
 
+  if (window.playStartScreenSound) {
+    window.playStartScreenSound();
+  }
+
   async function loadSubjects() {
     if (!window.api || !window.api.subjects || typeof window.api.subjects.listWithStats !== 'function') {
       grid.textContent = 'تعذر تحميل المواد';

@@ -101,6 +101,13 @@ window.renderRunCompetitionView = function renderRunCompetitionView(root, subjec
   const currentCompetitionId = competitionId || null;
   let summaryShown = false;
   let selectedParticipantId = null;
+  let perQuestionSeconds = 0;
+  let extraTimeSeconds = 0;
+  let remainingSeconds = 0;
+  let timerId = null;
+  let fiftyUsed = false;
+  let friendUsed = false;
+  let extraTimeUsed = false;
 
   function shuffleArray(arr) {
     for (let i = arr.length - 1; i > 0; i -= 1) {
@@ -140,6 +147,12 @@ window.renderRunCompetitionView = function renderRunCompetitionView(root, subjec
   async function showSummary() {
     questionContainer.innerHTML = '';
 
+    if (timerId) {
+      clearInterval(timerId);
+      timerId = null;
+    }
+    remainingSeconds = 0;
+
     if (!questions || questions.length === 0) {
       questionContainer.textContent = 'لا توجد أسئلة لهذه المادة بعد.';
       prevButton.disabled = true;
@@ -170,10 +183,15 @@ window.renderRunCompetitionView = function renderRunCompetitionView(root, subjec
           };
         });
 
+        const judgeNotes = friendUsed
+          ? 'تم استخدام مساعدة صديق في هذه المسابقة'
+          : null;
+
         await window.api.results.save({
           competitionId: currentCompetitionId,
           participantId: selectedParticipantId,
           score: correctCount,
+          judgeNotes,
           details
         });
       } catch (err) {
@@ -301,6 +319,12 @@ window.renderRunCompetitionView = function renderRunCompetitionView(root, subjec
   function renderCurrentQuestion() {
     questionContainer.innerHTML = '';
 
+    if (timerId) {
+      clearInterval(timerId);
+      timerId = null;
+    }
+    remainingSeconds = 0;
+
     if (!questions || questions.length === 0) {
       questionContainer.textContent = 'لا توجد أسئلة لهذه المادة بعد.';
       prevButton.disabled = true;
@@ -355,6 +379,8 @@ window.renderRunCompetitionView = function renderRunCompetitionView(root, subjec
     let selectedId = selectedAnswers[q.id] || null;
     const isChecked = !!checkedQuestions[q.id];
 
+    const answerItems = [];
+
     (q.answers || []).forEach((a) => {
       const li = document.createElement('li');
 
@@ -391,7 +417,36 @@ window.renderRunCompetitionView = function renderRunCompetitionView(root, subjec
 
       li.appendChild(label);
       answersList.appendChild(li);
+      answerItems.push({ li, answer: a });
     });
+
+    const lifelines = document.createElement('div');
+    lifelines.className = 'run-lifelines';
+
+    const fiftyButton = document.createElement('button');
+    fiftyButton.textContent = 'حذف إجابتين';
+    fiftyButton.className = 'btn-outline btn-small';
+    if (fiftyUsed) {
+      fiftyButton.disabled = true;
+    }
+
+    const friendButton = document.createElement('button');
+    friendButton.textContent = 'مساعدة صديق';
+    friendButton.className = 'btn-outline btn-small';
+    if (friendUsed) {
+      friendButton.disabled = true;
+    }
+
+    const extraTimeButton = document.createElement('button');
+    extraTimeButton.textContent = 'وقت إضافي';
+    extraTimeButton.className = 'btn-outline btn-small';
+    if (extraTimeUsed || perQuestionSeconds <= 0 || extraTimeSeconds <= 0) {
+      extraTimeButton.disabled = true;
+    }
+
+    lifelines.appendChild(fiftyButton);
+    lifelines.appendChild(friendButton);
+    lifelines.appendChild(extraTimeButton);
 
     const checkButton = document.createElement('button');
     checkButton.textContent = 'تحقق من الإجابة';
@@ -412,14 +467,171 @@ window.renderRunCompetitionView = function renderRunCompetitionView(root, subjec
       checkedQuestions[q.id] = true;
       renderCurrentQuestion();
 
+      if (window.playAnswerSound) {
+        window.playAnswerSound(isCorrect);
+      }
+
       if (window.showAnswerDialog) {
         window.showAnswerDialog(isCorrect);
       }
     });
 
+    fiftyButton.addEventListener('click', () => {
+      if (fiftyUsed) {
+        return;
+      }
+
+      const incorrectItems = answerItems.filter(
+        (item) => !item.answer.is_correct && item.li.style.display !== 'none'
+      );
+
+      if (incorrectItems.length <= 1) {
+        if (window.showToast) {
+          window.showToast('لا يمكن حذف إجابتين لهذا السؤال', 'warning');
+        }
+        return;
+      }
+
+      for (let i = incorrectItems.length - 1; i > 0; i -= 1) {
+        const j = Math.floor(Math.random() * (i + 1));
+        const tmp = incorrectItems[i];
+        incorrectItems[i] = incorrectItems[j];
+        incorrectItems[j] = tmp;
+      }
+
+      const toHide = incorrectItems.slice(0, 2);
+      toHide.forEach((item) => {
+        item.li.style.display = 'none';
+      });
+
+      fiftyUsed = true;
+      fiftyButton.disabled = true;
+
+      if (window.showToast) {
+        window.showToast('تم حذف إجابتين خاطئتين', 'info');
+      }
+    });
+
+    friendButton.addEventListener('click', () => {
+      if (friendUsed) {
+        return;
+      }
+
+      if (window.showToast) {
+        window.showToast('تم تفعيل مساعدة الصديق، يرجى انتظار إجابة الصديق.', 'info');
+      }
+
+      friendUsed = true;
+      friendButton.disabled = true;
+    });
+
+    extraTimeButton.addEventListener('click', () => {
+      if (extraTimeUsed || perQuestionSeconds <= 0 || extraTimeSeconds <= 0) {
+        return;
+      }
+
+      if (!timerId) {
+        if (window.showToast) {
+          window.showToast('لا يوجد مؤقت نشط لهذا السؤال', 'warning');
+        }
+        return;
+      }
+
+      remainingSeconds += extraTimeSeconds;
+      extraTimeUsed = true;
+      extraTimeButton.disabled = true;
+
+      if (window.showToast) {
+        window.showToast(`تم إضافة ${extraTimeSeconds} ثانية إلى الوقت`, 'info');
+      }
+    });
+
+    let timerWrapper = null;
+    let timerHand = null;
+    let timerText = null;
+    let timerLabel = null;
+
+    function updateAnalogTimer() {
+      if (!timerHand || perQuestionSeconds <= 0) {
+        return;
+      }
+      const ratio = Math.max(0, Math.min(1, remainingSeconds / perQuestionSeconds));
+      const angle = 360 * (1 - ratio);
+      timerHand.style.transform = `translateX(-50%) rotate(${angle}deg)`;
+      if (timerText) {
+        timerText.textContent = String(remainingSeconds);
+      }
+
+      const isWarning = remainingSeconds > 0 && remainingSeconds <= 5;
+      if (timerWrapper) {
+        if (isWarning) {
+          timerWrapper.classList.add('run-timer-analog-warning');
+        } else {
+          timerWrapper.classList.remove('run-timer-analog-warning');
+        }
+      }
+    }
+
+    if (perQuestionSeconds > 0) {
+      timerWrapper = document.createElement('div');
+      timerWrapper.className = 'run-timer-analog';
+
+      const timerCircle = document.createElement('div');
+      timerCircle.className = 'run-timer-analog-circle';
+
+      timerHand = document.createElement('div');
+      timerHand.className = 'run-timer-analog-hand';
+
+      timerText = document.createElement('span');
+      timerText.className = 'run-timer-analog-text';
+
+      timerCircle.appendChild(timerHand);
+      timerCircle.appendChild(timerText);
+
+      timerLabel = document.createElement('span');
+      timerLabel.className = 'run-timer-label';
+      timerLabel.textContent = 'مؤقت السؤال';
+
+      timerWrapper.appendChild(timerCircle);
+      timerWrapper.appendChild(timerLabel);
+
+      header.appendChild(timerWrapper);
+
+      remainingSeconds = perQuestionSeconds;
+      updateAnalogTimer();
+
+      timerId = setInterval(() => {
+        remainingSeconds -= 1;
+
+        if (remainingSeconds <= 0) {
+          clearInterval(timerId);
+          timerId = null;
+          remainingSeconds = 0;
+          if (timerLabel) {
+            timerLabel.textContent = 'انتهى الوقت';
+          }
+          updateAnalogTimer();
+
+          const inputs = answersList.querySelectorAll('input[type="radio"]');
+          inputs.forEach((inputEl) => {
+            inputEl.disabled = true;
+          });
+
+          checkButton.disabled = true;
+        } else {
+          if (window.playTimerTick && typeof window.playTimerTick === 'function') {
+            const isWarning = remainingSeconds > 0 && remainingSeconds <= 5;
+            window.playTimerTick(isWarning);
+          }
+          updateAnalogTimer();
+        }
+      }, 1000);
+    }
+
     card.appendChild(header);
     card.appendChild(qText);
     card.appendChild(answersList);
+    card.appendChild(lifelines);
     card.appendChild(checkButton);
 
     questionContainer.appendChild(card);
@@ -435,6 +647,12 @@ window.renderRunCompetitionView = function renderRunCompetitionView(root, subjec
 
   function showSetup() {
     questionContainer.innerHTML = '';
+
+    if (timerId) {
+      clearInterval(timerId);
+      timerId = null;
+    }
+    remainingSeconds = 0;
 
     if (!allQuestions || allQuestions.length === 0) {
       questionContainer.textContent = 'لا توجد أسئلة لهذه المادة بعد.';
@@ -487,6 +705,38 @@ window.renderRunCompetitionView = function renderRunCompetitionView(root, subjec
     rows.appendChild(medRow.row);
     rows.appendChild(hardRow.row);
 
+    const timerRow = document.createElement('div');
+    timerRow.className = 'run-setup-row';
+
+    const timerLabel = document.createElement('label');
+    timerLabel.textContent = 'الوقت لكل سؤال (بالثواني، 0 = بدون مؤقت)';
+
+    const timerInput = document.createElement('input');
+    timerInput.type = 'number';
+    timerInput.min = '0';
+    timerInput.value = '0';
+
+    timerRow.appendChild(timerLabel);
+    timerRow.appendChild(timerInput);
+
+    rows.appendChild(timerRow);
+
+    const extraTimeRow = document.createElement('div');
+    extraTimeRow.className = 'run-setup-row';
+
+    const extraTimeLabel = document.createElement('label');
+    extraTimeLabel.textContent = 'الوقت الإضافي عند استخدام المساعدة (بالثواني، 0 = بدون وقت إضافي)';
+
+    const extraTimeInput = document.createElement('input');
+    extraTimeInput.type = 'number';
+    extraTimeInput.min = '0';
+    extraTimeInput.value = '15';
+
+    extraTimeRow.appendChild(extraTimeLabel);
+    extraTimeRow.appendChild(extraTimeInput);
+
+    rows.appendChild(extraTimeRow);
+
     const shuffleRow = document.createElement('div');
     shuffleRow.className = 'run-setup-row';
 
@@ -525,6 +775,28 @@ window.renderRunCompetitionView = function renderRunCompetitionView(root, subjec
         }
         return;
       }
+
+      if (window.playRunStartSound) {
+        window.playRunStartSound();
+      }
+
+      const timerVal = parseInt(timerInput.value, 10);
+      if (!Number.isNaN(timerVal) && timerVal > 0) {
+        perQuestionSeconds = timerVal;
+      } else {
+        perQuestionSeconds = 0;
+      }
+
+      const extraTimeVal = parseInt(extraTimeInput.value, 10);
+      if (!Number.isNaN(extraTimeVal) && extraTimeVal > 0) {
+        extraTimeSeconds = extraTimeVal;
+      } else {
+        extraTimeSeconds = 0;
+      }
+
+      fiftyUsed = false;
+      friendUsed = false;
+      extraTimeUsed = false;
 
       const selected = [];
 
@@ -623,6 +895,10 @@ window.renderRunCompetitionView = function renderRunCompetitionView(root, subjec
     currentIndex = 0;
     summaryShown = false;
     scoreInfo.textContent = '';
+
+    fiftyUsed = false;
+    friendUsed = false;
+    extraTimeUsed = false;
 
     // require teacher to pick a participant again
     participantSelect.value = '';
