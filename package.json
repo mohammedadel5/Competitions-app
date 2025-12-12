@@ -1,6 +1,6 @@
 {
   "name": "competitions-app",
-  "version": "0.1.0",
+  "version": "0.1.5",
   "author": "Mohammed Adel <mat93.job@gmail.com>",
   "productName": "تطبيق مسابقات المدارس",
   "description": "Offline, Arabic-friendly desktop application for managing school competitions.",

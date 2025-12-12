@@ -98,6 +98,7 @@ window.renderRunCompetitionView = function renderRunCompetitionView(root, subjec
   let currentIndex = 0;
   const selectedAnswers = {};
   const checkedQuestions = {};
+  const hiddenAnswerIdsByQuestion = {};
   const currentCompetitionId = competitionId || null;
   let summaryShown = false;
   let selectedParticipantId = null;
@@ -379,46 +380,131 @@ window.renderRunCompetitionView = function renderRunCompetitionView(root, subjec
     let selectedId = selectedAnswers[q.id] || null;
     const isChecked = !!checkedQuestions[q.id];
 
+    function applyFiftyHiddenState() {
+      const hiddenSet = hiddenAnswerIdsByQuestion[q.id];
+      if (!hiddenSet || !(hiddenSet instanceof Set)) {
+        return;
+      }
+      answerItems.forEach((item) => {
+        if (hiddenSet.has(item.answer.id)) {
+          item.li.style.display = 'none';
+        }
+      });
+    }
+
+    function updateSelectionUI() {
+      selectedId = selectedAnswers[q.id] || null;
+      answerItems.forEach((item) => {
+        item.li.classList.remove('answer-selected');
+        if (!checkedQuestions[q.id] && selectedId && item.answer.id === selectedId) {
+          item.li.classList.add('answer-selected');
+        }
+      });
+    }
+
+    function revealCorrectness(withFeedback) {
+      if (checkedQuestions[q.id]) {
+        return;
+      }
+
+      const selectedIdInner = selectedAnswers[q.id] || null;
+      checkedQuestions[q.id] = true;
+
+      const correctAnswer = (q.answers || []).find((a) => a && a.is_correct);
+
+      // Apply highlights: correct is green; selected wrong is red; others neutral
+      answerItems.forEach((item) => {
+        item.li.classList.remove('answer-selected');
+        item.li.classList.remove('answer-correct');
+        item.li.classList.remove('answer-wrong');
+
+        if (correctAnswer && item.answer.id === correctAnswer.id) {
+          item.li.classList.add('answer-correct');
+        }
+        if (
+          selectedIdInner &&
+          item.answer.id === selectedIdInner &&
+          (!correctAnswer || item.answer.id !== correctAnswer.id)
+        ) {
+          item.li.classList.add('answer-wrong');
+        }
+        item.li.style.cursor = 'default';
+      });
+
+      applyFiftyHiddenState();
+      computeScore();
+
+      if (!withFeedback) {
+        return;
+      }
+
+      if (!selectedIdInner) {
+        if (window.showToast) {
+          window.showToast('انتهى الوقت ولم يتم اختيار إجابة', 'warning');
+        }
+        return;
+      }
+
+      const isCorrect = (q.answers || []).some(
+        (a) => a.id === selectedIdInner && a.is_correct
+      );
+
+      if (window.playAnswerSound) {
+        window.playAnswerSound(isCorrect);
+      }
+
+      if (window.showAnswerDialog) {
+        window.showAnswerDialog(isCorrect);
+      }
+    }
+
     const answerItems = [];
 
     (q.answers || []).forEach((a) => {
       const li = document.createElement('li');
 
+      if (!isChecked) {
+        li.style.cursor = 'pointer';
+      }
+
       const label = document.createElement('label');
-
-      const input = document.createElement('input');
-      input.type = 'radio';
-      input.name = 'run-answer';
-      input.value = String(a.id);
-      input.checked = selectedId === a.id;
-
-      input.addEventListener('change', () => {
-        selectedAnswers[q.id] = a.id;
-        renderCurrentQuestion();
-      });
 
       const span = document.createElement('span');
       span.textContent = a.text || '';
 
-      // Append span first, then input; CSS will use row-reverse so radio is at far right and text just to its left
       label.appendChild(span);
-      label.appendChild(input);
 
       if (isChecked) {
         if (a.is_correct) {
           li.classList.add('answer-correct');
-        }
-        if (selectedId === a.id && !a.is_correct) {
+        } else {
           li.classList.add('answer-wrong');
         }
       } else if (selectedId === a.id) {
         li.classList.add('answer-selected');
       }
 
+      li.addEventListener('click', () => {
+        if (checkedQuestions[q.id]) {
+          return;
+        }
+
+        // Selection only (always)
+        selectedAnswers[q.id] = a.id;
+        updateSelectionUI();
+
+        // If no timer, confirm immediately
+        if (perQuestionSeconds <= 0) {
+          revealCorrectness(true);
+        }
+      });
+
       li.appendChild(label);
       answersList.appendChild(li);
       answerItems.push({ li, answer: a });
     });
+
+    applyFiftyHiddenState();
 
     const lifelines = document.createElement('div');
     lifelines.className = 'run-lifelines';
@@ -448,41 +534,18 @@ window.renderRunCompetitionView = function renderRunCompetitionView(root, subjec
     lifelines.appendChild(friendButton);
     lifelines.appendChild(extraTimeButton);
 
-    const checkButton = document.createElement('button');
-    checkButton.textContent = 'تحقق من الإجابة';
-    checkButton.className = 'btn-outline';
-    checkButton.addEventListener('click', () => {
-      const selectedIdInner = selectedAnswers[q.id];
-      if (!selectedIdInner) {
-        if (window.showToast) {
-          window.showToast('يرجى اختيار إجابة أولاً', 'warning');
-        }
-        return;
-      }
-
-      const isCorrect = (q.answers || []).some(
-        (a) => a.id === selectedIdInner && a.is_correct
-      );
-
-      checkedQuestions[q.id] = true;
-      renderCurrentQuestion();
-
-      if (window.playAnswerSound) {
-        window.playAnswerSound(isCorrect);
-      }
-
-      if (window.showAnswerDialog) {
-        window.showAnswerDialog(isCorrect);
-      }
-    });
-
     fiftyButton.addEventListener('click', () => {
       if (fiftyUsed) {
         return;
       }
 
+      if (!hiddenAnswerIdsByQuestion[q.id] || !(hiddenAnswerIdsByQuestion[q.id] instanceof Set)) {
+        hiddenAnswerIdsByQuestion[q.id] = new Set();
+      }
+      const hiddenSet = hiddenAnswerIdsByQuestion[q.id];
+
       const incorrectItems = answerItems.filter(
-        (item) => !item.answer.is_correct && item.li.style.display !== 'none'
+        (item) => !item.answer.is_correct && !hiddenSet.has(item.answer.id)
       );
 
       if (incorrectItems.length <= 1) {
@@ -501,8 +564,10 @@ window.renderRunCompetitionView = function renderRunCompetitionView(root, subjec
 
       const toHide = incorrectItems.slice(0, 2);
       toHide.forEach((item) => {
-        item.li.style.display = 'none';
+        hiddenSet.add(item.answer.id);
       });
+
+      applyFiftyHiddenState();
 
       fiftyUsed = true;
       fiftyButton.disabled = true;
@@ -572,7 +637,7 @@ window.renderRunCompetitionView = function renderRunCompetitionView(root, subjec
       }
     }
 
-    if (perQuestionSeconds > 0) {
+    if (perQuestionSeconds > 0 && !checkedQuestions[q.id]) {
       timerWrapper = document.createElement('div');
       timerWrapper.className = 'run-timer-analog';
 
@@ -612,12 +677,8 @@ window.renderRunCompetitionView = function renderRunCompetitionView(root, subjec
           }
           updateAnalogTimer();
 
-          const inputs = answersList.querySelectorAll('input[type="radio"]');
-          inputs.forEach((inputEl) => {
-            inputEl.disabled = true;
-          });
-
-          checkButton.disabled = true;
+          // Confirm answer when time ends
+          revealCorrectness(true);
         } else {
           if (window.playTimerTick && typeof window.playTimerTick === 'function') {
             const isWarning = remainingSeconds > 0 && remainingSeconds <= 5;
@@ -632,7 +693,6 @@ window.renderRunCompetitionView = function renderRunCompetitionView(root, subjec
     card.appendChild(qText);
     card.appendChild(answersList);
     card.appendChild(lifelines);
-    card.appendChild(checkButton);
 
     questionContainer.appendChild(card);
 
@@ -828,6 +888,9 @@ window.renderRunCompetitionView = function renderRunCompetitionView(root, subjec
       Object.keys(checkedQuestions).forEach((key) => {
         delete checkedQuestions[key];
       });
+      Object.keys(hiddenAnswerIdsByQuestion).forEach((key) => {
+        delete hiddenAnswerIdsByQuestion[key];
+      });
 
       controls.style.display = 'flex';
       prevButton.style.display = '';
@@ -889,6 +952,9 @@ window.renderRunCompetitionView = function renderRunCompetitionView(root, subjec
     });
     Object.keys(checkedQuestions).forEach((key) => {
       delete checkedQuestions[key];
+    });
+    Object.keys(hiddenAnswerIdsByQuestion).forEach((key) => {
+      delete hiddenAnswerIdsByQuestion[key];
     });
 
     // reset run state
