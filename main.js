@@ -3,8 +3,6 @@ const path = require('path');
 const fs = require('fs');
 
 app.setName('تطبيق مسابقات المدارس');
-
-require('./src/db/db');
 const { registerAuthHandlers } = require('./src/main/ipcAuth');
 const { registerCompetitionHandlers } = require('./src/main/ipcCompetitions');
 const { registerParticipantHandlers } = require('./src/main/ipcParticipants');
@@ -120,6 +118,7 @@ function createAppMenu() {
 }
 
 app.whenReady().then(() => {
+  require('./src/db/db');
   registerAuthHandlers();
   registerCompetitionHandlers();
   registerParticipantHandlers();

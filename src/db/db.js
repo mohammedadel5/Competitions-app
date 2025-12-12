@@ -1,10 +1,21 @@
 const path = require('path');
 const fs = require('fs');
+const { app } = require('electron');
 const Database = require('better-sqlite3');
 const crypto = require('crypto');
 
-const dbFilePath = path.join(__dirname, 'competitions.db');
-const schemaPath = path.join(__dirname, 'schema.sql');
+const isPackaged = !!(app && app.isPackaged);
+
+const dbDirPath = isPackaged ? app.getPath('userData') : __dirname;
+const dbFilePath = path.join(dbDirPath, 'competitions.db');
+const schemaPath = isPackaged
+  ? path.join(process.resourcesPath, 'db', 'schema.sql')
+  : path.join(__dirname, 'schema.sql');
+
+try {
+  fs.mkdirSync(dbDirPath, { recursive: true });
+} catch (err) {
+}
 
 const db = new Database(dbFilePath);
 
